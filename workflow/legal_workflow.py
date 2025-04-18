@@ -68,7 +68,7 @@ def create_legal_crew(user_input: str, conversation_history: str = "无历史对
         agents=[legal_coordinator, legal_executor], # 按顺序定义参与的 Agent
         tasks=[decision_task, execution_task],     # 按顺序定义要执行的任务
         process=Process.sequential,                # 定义任务执行流程为顺序执行
-        verbose=2, # 设置日志详细程度 (0:不输出, 1:基本流程, 2:详细流程和Agent思考)
+        verbose=True, # 确保这里是 True
         # memory=True # 如果需要跨多轮对话保持记忆，可以启用 memory
     )
 

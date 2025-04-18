@@ -2,6 +2,14 @@
 import os
 from typing import List, Dict, Any
 from openai import OpenAI # 确保安装了 openai 库: pip install openai
+from copy import deepcopy
+import traceback
+
+# 设置环境变量，禁用模型验证
+os.environ["LITELLM_SKIP_MODEL_VALIDATION"] = "TRUE"
+
+# 设置环境变量，完全禁用LiteLLM路由
+os.environ["LITELLM_DISABLE_ROUTER"] = "TRUE"
 
 # --- LLM Wrapper Class ---
 # 这个类封装了与 DeepSeek 或兼容 OpenAI 的 API 的交互逻辑
@@ -19,6 +27,7 @@ class DeepSeekLLM:
         self.api_key = api_key
         self.temperature = temperature
         try:
+            # 使用OpenAI客户端连接到本地DeepSeek服务
             self.client = OpenAI(base_url=base_url, api_key=api_key)
             print(f"OpenAI client initialized for model '{model}' at '{base_url}'")
         except Exception as e:
@@ -26,68 +35,59 @@ class DeepSeekLLM:
             self.client = None
 
     def __call__(self, messages: List[Dict], **kwargs) -> str:
-        """
-        使得类实例可以像函数一样被调用，用于与 LLM 交互。
-        :param messages: 发送给 LLM 的消息列表 (符合 OpenAI 格式)。
-        :param kwargs: 其他可能的参数 (在此实现中未使用)。
-        :return: LLM 返回的文本内容，或者错误信息。
-        """
+        """简化版本的消息重组"""
         if not self.client:
             return "Error: OpenAI client not initialized."
-            
+        
         try:
-            # 简单的消息清理：确保角色有效，移除连续重复角色的消息
-            formatted_messages = [msg for msg in messages if msg.get("role") in ["system", "user", "assistant"]]
+            print("\n=============== 开始调用LLM ===============")
+            print(f"原始消息数量: {len(messages)}")
+            for i, msg in enumerate(messages):
+                print(f"  原始消息 {i+1}: role={msg.get('role', 'unknown')}, content={msg.get('content', '')[:50]}...")
             
-            cleaned_messages = []
-            last_role = None
-            for msg in formatted_messages:
-                # 检查 content 是否为 None 或非字符串，如果是，则跳过或使用默认值
-                if msg.get("content") is None or not isinstance(msg.get("content"), str):
-                   print(f"Warning: Skipping message with invalid content: {msg}")
-                   continue # 跳过无效消息
-                   
-                if msg["role"] != last_role:
-                    cleaned_messages.append(msg)
-                    last_role = msg["role"]
-                # 可选：如果连续消息角色相同，可以选择合并内容或保留最后一个
-                # else: # 如果角色相同，替换掉上一条相同角色的消息 (CrewAI可能自己会处理)
-                #    if cleaned_messages:
-                #        cleaned_messages[-1] = msg 
-
-            # 如果清理后没有消息，则返回错误
-            if not cleaned_messages:
-                 print("Error: No valid messages to send after cleaning.")
-                 return "Error: No valid messages to send."
-                 
-            # CrewAI 通常会管理消息顺序，确保最后是 user message (如果需要)
-            # 在这里，我们相信 CrewAI 的处理
-
+            # 收集所有角色的消息内容
+            all_content = ""
+            for msg in messages:
+                if msg.get("content") and isinstance(msg.get("content"), str):
+                    role = msg.get("role", "unknown")
+                    content = msg.get("content", "")
+                    all_content += f"[{role}]: {content}\n\n"
+            
+            # 创建单个用户消息
+            simplified_messages = [{"role": "user", "content": all_content.strip() + "\n\n[assistant]:"}]
+            
+            print(f"Simplifying message structure to a single user message:")
+            print(f"  Content: {simplified_messages[0]['content'][:100]}...")
+            
             response = self.client.chat.completions.create(
                 model=self.model,
-                messages=cleaned_messages,
+                messages=simplified_messages,
                 temperature=self.temperature,
             )
             
             content = response.choices[0].message.content
-            # CrewAI 通常会处理 "Final Answer:" 的解析，这里直接返回原始 content
+            print(f"调用结果: {content[:100]}...")
+            print("=============== LLM调用完成 ===============\n")
             return content.strip() if content else "Error: LLM returned empty content."
-            
+        
         except Exception as e:
-            print(f"LLM API 调用错误: {str(e)}")
-            # 对于调用错误，返回明确的错误信息
+            print("\n=============== LLM调用错误 ===============")
+            print(f"错误类型: {type(e).__name__}")
+            print(f"错误消息: {str(e)}")
+            traceback.print_exc()  # 打印完整的堆栈跟踪
+            print("=============== 错误详情结束 ===============\n")
             return f"Error during LLM call: {str(e)}"
 
 # --- 实例化 LLM ---
-# 优先从环境变量获取配置，提供默认值作为备选
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-3.5-turbo") # 你可以换成你的 DeepSeek 模型名
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8000/v1") # 你的本地 DeepSeek 服务地址
-LLM_API_KEY = os.getenv("LLM_API_KEY", "EMPTY") # 你的 API Key (如果是本地部署，可能为 "EMPTY")
+# 使用通用模型名称，不指定具体模型
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-3.5-turbo") # 使用一个常见的模型名称
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8000/v1") 
+LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-no-key-required")
 
 # 创建全局 LLM 实例，供其他模块导入使用
 llm = DeepSeekLLM(
     model=LLM_MODEL,
-    temperature=0.1, # 可以适当调整温度参数
+    temperature=0.1,
     base_url=LLM_BASE_URL,
     api_key=LLM_API_KEY
 )
@@ -99,3 +99,46 @@ print(f"  模型 (Model): {LLM_MODEL}")
 print(f"  基础 URL (Base URL): {LLM_BASE_URL}")
 print(f"  API Key 使用: {'是' if LLM_API_KEY != 'EMPTY' else '否 (或使用默认占位符)'}")
 print("-" * 30)
+
+# 在Agent实例化时，修改执行方法
+def custom_execute_task(self, task, context=None, **kwargs):
+    """直接调用OpenAI客户端而不是通过LiteLLM，并打印Agent输出"""
+    try:
+        # 这里直接使用DeepSeekLLM实例而不是Agent的llm属性
+        from config import llm
+
+        print(f"\n===== Agent: {self.role} 开始执行任务 =====") # 添加 Agent 角色打印
+        print(f"任务描述 (片段): {task.description[:100]}...") # 打印任务描述（可选）
+        if context:
+            print(f"上下文 (片段): {str(context)[:100]}...") # 打印上下文（可选）
+
+        # 构建任务提示
+        task_prompt = task.description
+        if context:
+            # 确保上下文是字符串，因为 decision_task 的输出是字符串
+            task_prompt = task_prompt.format(context=str(context))
+
+        # 创建消息
+        messages = [
+            {"role": "system", "content": f"你是{self.role}。{self.goal}"},
+            {"role": "user", "content": task_prompt}
+        ]
+
+        # 直接调用我们的DeepSeekLLM实例
+        result = llm(messages) # result 已经是最终的字符串输出了
+
+        print(f"\n💡 Agent: {self.role} 的输出:") # 添加 Agent 输出标记
+        print(result)                              # 打印 Agent 的完整输出
+        print(f"===== Agent: {self.role} 任务执行完毕 =====") # 添加结束标记
+
+        return result # 返回结果供 crewai 流程继续
+
+    except Exception as e:
+        print(f"❌ Agent: {self.role} 执行任务时出错: {e}")
+        import traceback
+        traceback.print_exc() # 打印详细错误
+        return f"Task execution failed for agent {self.role}: {str(e)}"
+
+# 替换Agent的execute_task方法
+from crewai.agent import Agent
+Agent.execute_task = custom_execute_task
