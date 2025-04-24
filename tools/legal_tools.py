@@ -1,6 +1,6 @@
 # tools/legal_tools.py
 import os
-from crewai import tool
+from crewai.tools import tool, BaseTool
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 
