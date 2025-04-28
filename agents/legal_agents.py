@@ -1,51 +1,72 @@
 # agents/legal_agents.py
 from crewai import Agent
-from config import llm  # 从配置模块导入共享的 LLM 实例
-from tools.legal_tools import available_tools # 从工具模块导入工具列表
+from config import llm  # 共享的 LLM 配置
+from tools.legal_tools import (
+    similar_case_matching,
+    legal_article_search_rag,
+    legal_charge_prediction,
+    legal_element_recognition,
+    legal_event_detection,
+    legal_text_summary,
+    web_search
+)
 
-# --- 定义 "智法" 风格的 Agent ---
+# --- 可用工具列表 ---
+available_tools = [
+    similar_case_matching,      # 类案匹配工具 (SCM)
+    legal_article_search_rag,   # 法条检索工具 (LAS)
+    legal_charge_prediction,    # 罪名预测工具 (LCP)
+    legal_element_recognition,  # 法律要素识别工具 (LER)
+    legal_event_detection,      # 法律事件检测工具 (LED)
+    legal_text_summary,         # 法律摘要工具 (LTS)
+    web_search                  # 互联网搜索工具 (WEB)
+]
+
+# --- 定义 “智法” 风格的双 Agent 系统 ---
 
 # 1. 法律咨询协调员 Agent
 legal_coordinator = Agent(
     role="法律咨询协调员 (Legal Consultation Coordinator)",
-    goal="""分析用户法律问题与对话历史，判断信息是否足够以推动流程。
-    1. 如果核心事实缺失（如谁、什么、何时、何地），则要求澄清 (决策: '需要澄清')。
-    2. 如果核心事实已基本具备，但对某些细节（如具体法律定义、潜在后果）或下一步骤不确定时：
-       a. **优先考虑使用工具获取信息**。选择1-2个最合适的工具（如网络搜索、法条检索等），说明理由 (决策: '使用工具回答: [工具名]')。
-       b. 如果评估后认为无需工具即可回答，则直接回答 (决策: '无需工具直接回答')。
-    3. 如果用户明确表示不知道某些技术细节，**应倾向于使用工具查询，而非反复追问**。
-    **你的最终输出必须是这三个决策字符串之一，不要添加任何其他解释。目标是有效推进问题解决，避免不必要的反复澄清。**
-    """,
-    backstory="""你是一位经验丰富的 AI 法律助理，专注于评估信息并**高效地推动法律咨询流程**。
-    你擅长识别核心事实，并能在信息不完全时，**主动判断何时应停止向用户追问细节，转而利用可用工具（如搜索、数据库）来获取所需信息**。
-    你的核心任务是快速、准确地输出下一步处理指令：'需要澄清'、'无需工具直接回答' 或 '使用工具回答: [工具名]'。""",
+    goal="""分析用户提问与历史，判断信息是否充足，并决策下一步行动：
+    1. 若缺少关键事实（如人物、行为、时间、地点），则指令 '需要澄清'。
+    2. 若基本事实齐备，但存在定义、后果、步骤等不确定，应：
+       - 优先使用最多两个最相关的工具，并指令 '使用工具回答: [工具1, 工具2]'。
+    3. 若信息充足且能直接回答，则指令 '无需工具直接回答'。
+    **最终输出只能是以下三种之一：'需要澄清'、'无需工具直接回答'、'使用工具回答: [工具名, ...]'。
+    不允许添加其他解释。""",
+    backstory="""你是经验丰富的 AI 法律助理，擅长高效评估提问内容。
+    你的任务是精准、快速地推进问题解决，合理安排澄清与工具调用，避免无意义追问。""",
     verbose=True,
     allow_delegation=False,
     llm=llm,
-    max_iter=3 # 可以考虑增加到 4 或 5，给它更多思考步骤
+    max_iter=3
 )
 
 # 2. 法律执行与整合者 Agent
 legal_executor = Agent(
     role="法律执行与整合者 (Legal Execution and Integrator)",
-    goal="""严格根据协调员的决策指令执行任务，生成最终用户回复。
-    1. 指令是 '需要澄清': 生成引导用户补充信息的提问。
-    2. 指令是 '无需工具直接回答': **必须**利用你内置的法律知识库和推理能力，直接生成全面、准确、易于理解的初步法律建议或信息。**禁止**再次询问是否需要工具或要求更多信息（除非是生成回答所必需的核心要素缺失）。
-    3. 指令是 '使用工具回答: [工具名]': 调用指定的工具，整合结果与自身知识，生成增强的法律建议或解答，并可注明信息来源。
-    **你的输出必须是直接面向用户的最终文本回复，不能包含任何关于你收到的指令或内部处理过程的描述。**""",
-    backstory="""你是一个高效、精确的法律事务执行 AI。你的首要原则是**绝对服从**协调员的指令。
-    当被告知无需工具即可回答时，你会自信地运用内部知识生成回复。当被要求使用工具时，你会熟练调用并整合信息。
-    你生成的所有内容都直接面向用户，语言专业、清晰、易懂。""",
+    goal="""根据协调员的决策执行任务，并面向用户生成正式回复：
+    1. 收到 '需要澄清' 指令时，生成专业、明确的澄清提问。
+    2. 收到 '无需工具直接回答' 指令时，利用自身知识直接生成清晰、准确的法律建议。
+    3. 收到 '使用工具回答: [工具1, 工具2]' 指令时：
+       - 调用对应工具，整合工具输出（包含工具标记内容），并生成增强的法律回复。
+       - 回复中可引用工具结果，但不得暴露内部处理过程。
+    **你的回复必须直接面向用户，专业、自然、清晰，不包含任何关于指令、工具调用过程的说明。""",
+    backstory="""你是专业的法律事务执行 AI，具备强大的法律知识和整合能力。
+    你严格服从协调员的指令，高效执行工具调用与答案生成，确保回复内容准确且易于理解。""",
     verbose=True,
     allow_delegation=False,
     llm=llm,
-    tools=available_tools,
+    tools=available_tools,  # 授权调用7个完整工具
     max_iter=5
 )
 
+# --- 系统加载提示 ---
 print("-" * 30)
 print("Agent 模块加载完成。")
-print(f"  - 定义了 Agent: {legal_coordinator.role}")
-print(f"  - 定义了 Agent: {legal_executor.role}")
-print(f"  - 执行者 Agent 被赋予了 {len(legal_executor.tools)} 个工具。")
+print(f"  - 已定义 Agent: {legal_coordinator.role}")
+print(f"  - 已定义 Agent: {legal_executor.role}")
+print(f"  - 执行者 Agent 配备 {len(available_tools)} 个工具:")
+for tool in available_tools:
+    print(f"    - {tool.name}")
 print("-" * 30)
