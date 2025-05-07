@@ -1,10 +1,13 @@
 # main.py
 import os
+os.environ['LITELLM_LOG'] = 'DEBUG'
+
 import traceback
-import re
+import re 
 from workflow.legal_workflow import create_legal_crew
 from crewai.crews.crew_output import CrewOutput
 from crewai.tasks.task_output import TaskOutput
+import litellm
 
 # --- 设置环境变量 (保持不变) ---
 os.environ["LITELLM_SKIP_MODEL_VALIDATION"] = "TRUE"
@@ -20,11 +23,9 @@ def execute_workflow(user_input: str, history_list: list) -> str:
     """
     try:
         # 将列表格式的历史转换为适合 Agent prompt 的字符串格式
-        # 你可以根据需要调整这个格式，例如添加换行符或角色标签
         formatted_history = "\n".join(history_list)
 
         # 创建 Crew 实例，传入当前用户输入和格式化后的历史
-        # 确保 create_legal_crew 能正确接收并使用 history
         workflow_crew = create_legal_crew(user_input, formatted_history)
 
         print("\n🚀 开始执行工作流 (Kicking off the workflow)...")
@@ -35,6 +36,7 @@ def execute_workflow(user_input: str, history_list: list) -> str:
         final_answer = ""
         raw_output = None
 
+        # (结果提取逻辑保持不变)
         if isinstance(result, CrewOutput) and result.tasks_output:
             print(f"ℹ️ 工作流返回 CrewOutput 对象。尝试提取最后一个任务的输出。")
             last_task_output = result.tasks_output[-1]
@@ -72,7 +74,7 @@ def execute_workflow(user_input: str, history_list: list) -> str:
         if not isinstance(final_answer, str):
             final_answer = str(final_answer)
 
-        # --- 改进的清理逻辑 (保持不变) ---
+        # --- 改进的清理逻辑 (移除了正则表达式部分) ---
         cleaned_answer = final_answer
         original_cleaned_answer_before_any_cleaning = cleaned_answer
         prefixes_to_remove = [
@@ -83,21 +85,17 @@ def execute_workflow(user_input: str, history_list: list) -> str:
             "为了更好地帮助您，我需要了解以下信息：", "为了更好地帮助您，请您提供以下信息：",
             "进行澄清。",
         ]
-        prefix_removed = False
+        prefix_removed = False # 这个变量现在可能没什么用了，但保留也无妨
         for prefix in prefixes_to_remove:
+            # 前缀移除逻辑保持不变 (这部分不使用正则表达式)
             if cleaned_answer.strip().startswith(prefix):
                 prefix_len = len(prefix)
                 cleaned_answer = cleaned_answer[cleaned_answer.find(prefix) + prefix_len:].strip()
                 cleaned_answer = cleaned_answer.lstrip('，').lstrip(':：').lstrip()
                 print(f"  移除了前缀 '{prefix[:30]}...'")
-                prefix_removed = True
+                prefix_removed = True # 标记有前缀被移除
                 break
-        if prefix_removed:
-             pattern = r"^\s*(用户提问是|您的问题是)\s*[:：]\s*[""']?.*?['""']?\s*(\n|$)"
-             match = re.match(pattern, cleaned_answer, re.MULTILINE)
-             if match:
-                 print(f"  移除了复述的用户问题: '{match.group(0).strip()[:50]}...'")
-                 cleaned_answer = cleaned_answer[match.end():].strip()
+
         if not cleaned_answer.strip():
              if any(kw in original_cleaned_answer_before_any_cleaning for kw in ["为了更好", "请问", "能否提供", "需要了解", "请您提供", "什么信息", "哪些细节"]):
                  print("  ⚠️ 清理后结果为空，但原始输出似乎包含有效问题，尝试回退并仅移除首要前缀。")
@@ -128,7 +126,7 @@ def execute_workflow(user_input: str, history_list: list) -> str:
         traceback.print_exc()
         return f"抱歉，处理您的请求时遇到了内部错误。请稍后再试。错误信息：{str(e)}"
 
-# --- 主交互循环 (修改以支持多轮对话) ---
+# --- 主交互循环 (保持不变) ---
 def main():
     """
     程序主入口，运行用户交互循环。
@@ -143,52 +141,35 @@ def main():
 
     while True:
         try:
-            # 根据是否是第一轮，显示不同的提示
             if is_first_turn:
                 user_input = input("\n👉 请您描述遇到的法律问题：")
-                # 如果用户第一轮就退出
                 if user_input.strip().lower() in ['退出', 'exit']:
                      print("\n👋 感谢您的使用，再见！")
                      break
-                if user_input.strip(): # 确保第一轮有输入才改变状态
+                if user_input.strip():
                     is_first_turn = False
                 else:
                     print("⚠️ 输入不能为空，请输入您的问题。")
                     continue
             else:
-                user_input = input("\n💬 您：") # 后续轮次的提示符
+                user_input = input("\n💬 您：")
 
-            # 检查退出命令
             if user_input.strip().lower() in ['退出', 'exit']:
                 print("\n👋 感谢您的使用，再见！")
                 break
 
-            # 检查空输入
             if not user_input.strip():
                 print("⚠️ 输入不能为空，请输入您的问题或回复。")
                 continue
 
-            # 将当前用户输入添加到历史记录中 (在调用工作流之前)
-            # 你可以选择更结构化的格式，如 {"role": "user", "content": user_input}
-            # 但为了简单起见，这里使用字符串格式
             conversation_history.append(f"User: {user_input}")
 
             print("\n⏳ 正在分析并生成回复，请稍候...")
             print("-" * 60)
 
-            # 调用工作流执行函数，传入当前输入和历史列表
             final_response = execute_workflow(user_input, conversation_history)
 
-            # 将 AI 的回复添加到历史记录中
             conversation_history.append(f"AI: {final_response}")
-
-            # --- (可选) 限制历史记录长度 ---
-            # 如果对话过长，LLM 处理可能会变慢或超出上下文限制
-            # max_history_turns = 10 # 例如，只保留最近 10 轮对话 (20条记录)
-            # if len(conversation_history) > max_history_turns * 2:
-            #     conversation_history = conversation_history[-(max_history_turns * 2):]
-            #     print(f"  (提示：为保持效率，对话历史已截断至最近 {max_history_turns} 轮)")
-            # --------------------------------
 
             print("-" * 60)
             print("💡 AI 助手的回复:")
@@ -201,7 +182,6 @@ def main():
         except Exception as e:
             print(f"\n❌ 主循环发生未预期错误: {e}")
             traceback.print_exc()
-            # 可以考虑是否需要重置 is_first_turn 或清空 history
 
 if __name__ == "__main__":
     main()

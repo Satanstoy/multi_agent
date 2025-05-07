@@ -8,3 +8,11 @@ duckduckgo_search>=8.0.1
 # beautifulsoup4   # 如果你的工具需要解析 HTML
 # tavily-python    # 如果你使用 Tavily 进行网络搜索
 # ... 其他你实际使用的库
+
+
+
+python -m vllm.entrypoints.openai.api_server \
+    --model /data/sj/deepseek \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --trust-remote-code
