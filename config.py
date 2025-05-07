@@ -1,144 +1,91 @@
-# config.py
+# config.py (配置Y)
 import os
-from typing import List, Dict, Any
-from openai import OpenAI # 确保安装了 openai 库: pip install openai
-from copy import deepcopy
 import traceback
+from langchain_openai import ChatOpenAI
 
-# 设置环境变量，禁用模型验证
-os.environ["LITELLM_SKIP_MODEL_VALIDATION"] = "TRUE"
+# --- 设置环境变量 ---
+# 确保这些环境变量被设置，供 LiteLLM 使用
+LLM_BASE_URL_FOR_ENV = os.getenv("LLM_BASE_URL", "http://localhost:8000/v1")
+LLM_API_KEY_FOR_ENV = os.getenv("LLM_API_KEY", "not-needed")
 
-# 设置环境变量，完全禁用LiteLLM路由
-os.environ["LITELLM_DISABLE_ROUTER"] = "TRUE"
+print(f"--- INFO: 正在设置 OPENAI_API_BASE 环境变量为: '{LLM_BASE_URL_FOR_ENV}' ---")
+os.environ["OPENAI_API_BASE"] = LLM_BASE_URL_FOR_ENV
 
-# --- LLM Wrapper Class ---
-# 这个类封装了与 DeepSeek 或兼容 OpenAI 的 API 的交互逻辑
-class DeepSeekLLM:
-    def __init__(self, model: str, base_url: str, api_key: str, temperature: float = 0.0):
-        """
-        初始化 LLM 客户端。
-        :param model: 使用的模型名称。
-        :param base_url: API 的基础 URL。
-        :param api_key: API 密钥。
-        :param temperature: 生成文本的温度参数 (0 表示更确定性)。
-        """
-        self.model = model
-        self.base_url = base_url
-        self.api_key = api_key
-        self.temperature = temperature
-        try:
-            # 使用OpenAI客户端连接到本地DeepSeek服务
-            self.client = OpenAI(base_url=base_url, api_key=api_key)
-            print(f"OpenAI client initialized for model '{model}' at '{base_url}'")
-        except Exception as e:
-            print(f"Error initializing OpenAI client: {e}")
-            self.client = None
+print(f"--- INFO: 正在设置 OPENAI_API_KEY 环境变量为: '{LLM_API_KEY_FOR_ENV}' ---")
+os.environ["OPENAI_API_KEY"] = LLM_API_KEY_FOR_ENV
 
-    def __call__(self, messages: List[Dict], **kwargs) -> str:
-        """简化版本的消息重组"""
-        if not self.client:
-            return "Error: OpenAI client not initialized."
-        
-        try:
-            print("\n=============== 开始调用LLM ===============")
-            print(f"原始消息数量: {len(messages)}")
-            for i, msg in enumerate(messages):
-                print(f"  原始消息 {i+1}: role={msg.get('role', 'unknown')}, content={msg.get('content', '')[:50]}...")
-            
-            # 收集所有角色的消息内容
-            all_content = ""
-            for msg in messages:
-                if msg.get("content") and isinstance(msg.get("content"), str):
-                    role = msg.get("role", "unknown")
-                    content = msg.get("content", "")
-                    all_content += f"[{role}]: {content}\n\n"
-            
-            # 创建单个用户消息
-            simplified_messages = [{"role": "user", "content": all_content.strip() + "\n\n[assistant]:"}]
-            
-            print(f"Simplifying message structure to a single user message:")
-            print(f"  Content: {simplified_messages[0]['content'][:100]}...")
-            
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=simplified_messages,
-                temperature=self.temperature,
-            )
-            
-            content = response.choices[0].message.content
-            print(f"调用结果: {content[:100]}...")
-            print("=============== LLM调用完成 ===============\n")
-            return content.strip() if content else "Error: LLM returned empty content."
-        
-        except Exception as e:
-            print("\n=============== LLM调用错误 ===============")
-            print(f"错误类型: {type(e).__name__}")
-            print(f"错误消息: {str(e)}")
-            traceback.print_exc()  # 打印完整的堆栈跟踪
-            print("=============== 错误详情结束 ===============\n")
-            return f"Error during LLM call: {str(e)}"
+# --- LLM 配置 ---
+# !!! 关键：模型名称必须带有 'openai/' 前缀给 LiteLLM !!!
+LLM_MODEL_FOR_LITELLM_PROVIDER_ID = os.getenv("LLM_MODEL", "openai//data/sj/deepseek")
 
-# --- 实例化 LLM ---
-# 使用通用模型名称，不指定具体模型
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-3.5-turbo") # 使用一个常见的模型名称
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8000/v1") 
-LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-no-key-required")
+# ChatOpenAI 实例的参数
+LLM_BASE_URL_FOR_CHATOPENAI = LLM_BASE_URL_FOR_ENV
+LLM_API_KEY_FOR_CHATOPENAI = LLM_API_KEY_FOR_ENV
 
-# 创建全局 LLM 实例，供其他模块导入使用
-llm = DeepSeekLLM(
-    model=LLM_MODEL,
-    temperature=0.1,
-    base_url=LLM_BASE_URL,
-    api_key=LLM_API_KEY
-)
+# 打印调试信息
+_actual_model_path_for_vllm = LLM_MODEL_FOR_LITELLM_PROVIDER_ID.split('openai/', 1)[-1] if LLM_MODEL_FOR_LITELLM_PROVIDER_ID.startswith("openai/") else LLM_MODEL_FOR_LITELLM_PROVIDER_ID
+print(f"--- DEBUG: LLM_MODEL environment variable = {os.getenv('LLM_MODEL')} ( defaulting to: {LLM_MODEL_FOR_LITELLM_PROVIDER_ID} for LiteLLM provider ID) ---")
+print(f"--- DEBUG: (Actual model path expected by vLLM server if LiteLLM strips prefix: {_actual_model_path_for_vllm}) ---")
+print(f"--- DEBUG: LLM_BASE_URL used for ChatOpenAI = {LLM_BASE_URL_FOR_CHATOPENAI} ---")
+print(f"--- DEBUG: LLM_API_KEY used for ChatOpenAI = '{LLM_API_KEY_FOR_CHATOPENAI}' ---")
+print(f"--- DEBUG: OPENAI_API_BASE environment variable is set to: '{os.environ.get('OPENAI_API_BASE')}' ---")
+print(f"--- DEBUG: OPENAI_API_KEY environment variable is set to: '{os.environ.get('OPENAI_API_KEY')}' ---")
 
-# 打印初始化信息，确认配置加载情况
-print("-" * 30)
-print(f"LLM 配置加载:")
-print(f"  模型 (Model): {LLM_MODEL}")
-print(f"  基础 URL (Base URL): {LLM_BASE_URL}")
-print(f"  API Key 使用: {'是' if LLM_API_KEY != 'EMPTY' else '否 (或使用默认占位符)'}")
-print("-" * 30)
+# --- 使用 LangChain 实例化 LLM ---
+llm = None
+try:
+    # !!! 关键：使用带前缀的模型名称初始化 ChatOpenAI !!!
+    # 这是为了让 CrewAI -> LiteLLM 能识别 provider
+    print(f"--- 正在初始化 LangChain ChatOpenAI LLM (连接到 {LLM_BASE_URL_FOR_CHATOPENAI}, 模型 {LLM_MODEL_FOR_LITELLM_PROVIDER_ID}) ---")
+    llm = ChatOpenAI(
+        model=LLM_MODEL_FOR_LITELLM_PROVIDER_ID, # <-- 使用带前缀的名称
+        temperature=0.1,
+        openai_api_base=LLM_BASE_URL_FOR_CHATOPENAI,
+        openai_api_key=LLM_API_KEY_FOR_CHATOPENAI,
+        request_timeout=60
+    )
+    print("✅ LangChain ChatOpenAI LLM 初始化成功!")
+    print(f"   实例模型名称 (llm.model_name): {getattr(llm, 'model_name', 'N/A')}") # 这里会显示 openai//data/sj/deepseek
+    print(f"   实例API Base (llm.openai_api_base): {getattr(llm, 'openai_api_base', 'N/A')}")
 
-# 在Agent实例化时，修改执行方法
-def custom_execute_task(self, task, context=None, **kwargs):
-    """直接调用OpenAI客户端而不是通过LiteLLM，并打印Agent输出"""
-    try:
-        # 这里直接使用DeepSeekLLM实例而不是Agent的llm属性
-        from config import llm
+except Exception as e:
+    # ... (错误处理代码保持不变) ...
+    print(f"❌ 初始化 LangChain ChatOpenAI LLM 时出错: {e}")
+    print(f"   错误类型: {type(e).__name__}")
+    print("   请检查:")
+    print(f"     1. vLLM API 服务 ({LLM_BASE_URL_FOR_CHATOPENAI}) 是否正在运行且可访问?")
+    print(f"     2. 环境变量 OPENAI_API_BASE 和 OPENAI_API_KEY 是否已正确设置?")
+    print(f"     3. 模型名称 '{LLM_MODEL_FOR_LITELLM_PROVIDER_ID}' 是否适合 LiteLLM 识别 provider?")
+    print("详细错误追踪信息:")
+    traceback.print_exc()
+    print("⚠️ LLM 实例未能创建，后续 CrewAI 工作流将无法运行。")
 
-        print(f"\n===== Agent: {self.role} 开始执行任务 =====") # 添加 Agent 角色打印
-        print(f"任务描述 (片段): {task.description[:100]}...") # 打印任务描述（可选）
-        if context:
-            print(f"上下文 (片段): {str(context)[:100]}...") # 打印上下文（可选）
 
-        # 构建任务提示
-        task_prompt = task.description
-        if context:
-            # 确保上下文是字符串，因为 decision_task 的输出是字符串
-            task_prompt = task_prompt.format(context=str(context))
+# --- 打印最终配置概览 ---
+# (这部分代码不需要修改)
+print("-" * 40)
+print("LLM 配置加载完成 (使用 LangChain)")
+if llm:
+    model_used_in_instance = getattr(llm, 'model_name', 'N/A') # 获取实例中的模型名
+    base_url_used_in_instance = getattr(llm, 'openai_api_base', 'N/A')
+    api_key_in_env = os.environ.get("OPENAI_API_KEY", "未设置")
+    api_base_in_env = os.environ.get("OPENAI_API_BASE", "未设置")
+    env_var_status_desc = f"环境变量 OPENAI_API_KEY='{api_key_in_env}', OPENAI_API_BASE='{api_base_in_env}'"
 
-        # 创建消息
-        messages = [
-            {"role": "system", "content": f"你是{self.role}。{self.goal}"},
-            {"role": "user", "content": task_prompt}
-        ]
+    print(f"  LLM实例模型名 (llm.model_name): {model_used_in_instance}")
+    print(f"  LLM实例基础URL (llm.openai_api_base): {base_url_used_in_instance}")
+    print(f"  环境变量状态: {env_var_status_desc}")
+    print("  状态: 初始化成功")
+else:
+    # ... (错误处理代码保持不变) ...
+    model_to_print = LLM_MODEL_FOR_LITELLM_PROVIDER_ID
+    print(f"  尝试使用模型 (Model for LiteLLM): {model_to_print} (尝试配置)")
+    print(f"  基础 URL (Base URL): {LLM_BASE_URL_FOR_CHATOPENAI} (尝试配置)")
+    api_key_in_env = os.environ.get("OPENAI_API_KEY", "未设置")
+    api_base_in_env = os.environ.get("OPENAI_API_BASE", "未设置")
+    env_var_status_desc = f"环境变量 OPENAI_API_KEY='{api_key_in_env}', OPENAI_API_BASE='{api_base_in_env}'"
+    print(f"  环境变量状态: {env_var_status_desc}")
+    print("  状态: 初始化失败 ❌")
+print("-" * 40)
 
-        # 直接调用我们的DeepSeekLLM实例
-        result = llm(messages) # result 已经是最终的字符串输出了
-
-        print(f"\n💡 Agent: {self.role} 的输出:") # 添加 Agent 输出标记
-        print(result)                              # 打印 Agent 的完整输出
-        print(f"===== Agent: {self.role} 任务执行完毕 =====") # 添加结束标记
-
-        return result # 返回结果供 crewai 流程继续
-
-    except Exception as e:
-        print(f"❌ Agent: {self.role} 执行任务时出错: {e}")
-        import traceback
-        traceback.print_exc() # 打印详细错误
-        return f"Task execution failed for agent {self.role}: {str(e)}"
-
-# 替换Agent的execute_task方法
-from crewai.agent import Agent
-Agent.execute_task = custom_execute_task
+# --- 文件结束 ---
