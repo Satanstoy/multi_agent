@@ -12,7 +12,11 @@ duckduckgo_search>=8.0.1
 
 
 python -m vllm.entrypoints.openai.api_server \
-    --model /data/sj/deepseek \
+    --model /data/sj/models/Qwen3-8B \
     --host 0.0.0.0 \
     --port 8000 \
     --trust-remote-code
+
+
+
+python -m vllm.entrypoints.openai.api_server --model /data/sj/models/Qwen3-8B --max-model-len 16384

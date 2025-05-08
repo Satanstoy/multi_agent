@@ -16,8 +16,7 @@ os.environ["OPENAI_API_KEY"] = LLM_API_KEY_FOR_ENV
 
 # --- LLM 配置 ---
 # !!! 关键：模型名称必须带有 'openai/' 前缀给 LiteLLM !!!
-LLM_MODEL_FOR_LITELLM_PROVIDER_ID = os.getenv("LLM_MODEL", "openai//data/sj/deepseek")
-
+LLM_MODEL_FOR_LITELLM_PROVIDER_ID = os.getenv("LLM_MODEL", "openai//data/sj/models/Qwen3-8B") 
 # ChatOpenAI 实例的参数
 LLM_BASE_URL_FOR_CHATOPENAI = LLM_BASE_URL_FOR_ENV
 LLM_API_KEY_FOR_CHATOPENAI = LLM_API_KEY_FOR_ENV
