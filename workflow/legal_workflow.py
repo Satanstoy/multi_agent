@@ -1,4 +1,5 @@
 # workflow/legal_workflow.py
+from config import llm # 导入llm实例
 from crewai import Task, Crew, Process
 from agents.legal_agents import (
     legal_coordinator,
@@ -84,6 +85,7 @@ def create_legal_crew(user_input: str, conversation_history: str = "无历史对
             conditional_tool_execution_task,
             final_response_generation_task
         ],
+        llm=llm,
         process=Process.sequential,
         verbose=True,
         # memory=True # 按需启用
