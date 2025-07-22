@@ -1,26 +1,72 @@
-# docs/index_legal_docs.py
+# docs/index_docs.py
 import os
 import glob
 import traceback
 import argparse
+import json
 from tqdm import tqdm
+import torch
+
+# LangChain 相关库导入
 from langchain_community.document_loaders import DirectoryLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_community.vectorstores import Chroma
+from langchain_core.documents import Document
 
-# --- 默认配置 (不变) ---
+# --- 默认配置 ---
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 ADD_BATCH_SIZE = 100
+# --- 嵌入模型的批处理大小，用于GPU计算。可根据显存大小调整以提升性能。---
+EMBED_BATCH_SIZE = 1024
 
-def create_vector_store(source_dir: str, db_dir: str, model_path: str):
+# --- JSON 文件加载器 (无变动) ---
+def load_cail_scm_from_json(files_to_process: list) -> list:
     """
-    通用函数：加载指定目录的 DOCX, 分割, 从本地加载嵌入模型, 创建向量存储。
-    (此函数内部逻辑完全不需要修改)
-    """
+    从给定的文件列表加载 CAIL-SCM 格式的 JSON 文件,
+    并将每个案件的 A, B, C 文书解析为独立的 LangChain Document 对象。
 
-    # 0. 检查路径
+    :param files_to_process: 需要处理的JSON文件路径列表。
+    :return: 一个包含所有解析出的 Document 对象的列表。
+    """
+    documents = []
+    doc_id_counter = 0
+    for file_path in files_to_process:
+        file_name = os.path.basename(file_path)
+        print(f"  - 正在处理新文件: {file_name}")
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for i, line in enumerate(tqdm(f, desc=f"  解析 {file_name}", unit="行")):
+                    if not line.strip():
+                        continue
+                    
+                    data = json.loads(line)
+                    
+                    for key in ['A', 'B', 'C']:
+                        if key in data and data[key]:
+                            doc = Document(
+                                page_content=data[key],
+                                metadata={
+                                    "source": file_name,
+                                    "doc_id": f"case_{doc_id_counter}"
+                                }
+                            )
+                            documents.append(doc)
+                            doc_id_counter += 1
+        except json.JSONDecodeError as e:
+            print(f"❌ 错误: 解析 JSON 文件 '{file_path}' 的第 {i+1} 行时出错: {e}")
+        except Exception as e:
+            print(f"❌ 错误: 读取或处理文件 '{file_path}' 时出错: {e}")
+            
+    return documents
+
+
+def create_vector_store(source_dir: str, db_dir: str, model_path: str, doc_type: str):
+    """
+    通用函数：根据文档类型加载文档, 分割, 创建向量存储。
+    现在支持增量更新。
+    """
     if not os.path.isdir(source_dir):
         print(f"❌ 错误：源目录 '{source_dir}' 不存在。")
         return
@@ -28,125 +74,125 @@ def create_vector_store(source_dir: str, db_dir: str, model_path: str):
         print(f"❌ 错误：指定的本地模型路径不存在: '{model_path}'")
         return
 
-    # 1. 加载文档
-    print(f"\n📚 正在从 '{source_dir}' 加载 DOCX 文档...")
-    loader = DirectoryLoader(
-        source_dir, glob="*.docx", loader_cls=Docx2txtLoader,
-        show_progress=True, use_multithreading=False, recursive=False, silent_errors=True
-    )
-    try:
-        documents = loader.load()
-        if not documents:
-            print(f"⚠️ 警告：在目录 '{source_dir}' 中未找到或未能加载任何 .docx 文件。")
-            return
-    except ImportError as e:
-        if 'docx2txt' in str(e).lower(): print(f"❌ 错误：缺少 'docx2txt' 库。请运行 'pip install docx2txt'。")
-        else: print(f"❌ 导入错误: {e}")
+    log_file_path = os.path.join(db_dir, 'processed_files.log')
+    processed_files = set()
+    if os.path.exists(log_file_path):
+        with open(log_file_path, 'r', encoding='utf-8') as f:
+            processed_files = set(line.strip() for line in f)
+    print(f"📖 已处理文件日志找到 {len(processed_files)} 条记录。")
+
+    # 1. 加载文档 (只加载新文件)
+    print(f"\n📚 正在从 '{source_dir}' 检查并加载新的 {doc_type} 文档...")
+    
+    files_to_process = []
+    if doc_type == 'legal':
+        all_files = glob.glob(os.path.join(source_dir, '*.docx'))
+        files_to_process = [f for f in all_files if os.path.basename(f) not in processed_files]
+    elif doc_type == 'case':
+        all_files = glob.glob(os.path.join(source_dir, '**', '*.json'), recursive=True)
+        files_to_process = [f for f in all_files if os.path.basename(f) not in processed_files]
+
+    if not files_to_process:
+        print("✅ 未发现需要处理的新文件。数据库已是最新。")
         return
+
+    print(f"📂 发现 {len(files_to_process)} 个新文件需要处理: {[os.path.basename(f) for f in files_to_process]}")
+    
+    documents = []
+    try:
+        if doc_type == 'legal':
+            for file_path in files_to_process:
+                 loader = Docx2txtLoader(file_path)
+                 documents.extend(loader.load())
+        elif doc_type == 'case':
+            documents = load_cail_scm_from_json(files_to_process)
     except Exception as e:
-        print(f"❌ 错误：加载 DOCX 文档时出错: {e}"); traceback.print_exc(); return
-    print(f"✅ 成功加载了 {len(documents)} 个文档对象。")
+        print(f"❌ 错误：加载新文档时出错: {e}"); traceback.print_exc(); return
+    
+    if not documents:
+        print(f"⚠️ 警告：未能从新文件中加载任何文档内容。")
+        return
+        
+    print(f"✅ 成功从新文件中加载了 {len(documents)} 个文档对象。")
 
     # 2. 分割文档
-    print("\n✂️ 正在将文档分割成块...")
-    try:
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=CHUNK_SIZE,
-            chunk_overlap=CHUNK_OVERLAP,
-            separators=["\n\n", "\n", "。", "！", "？", "，", "、", " ", ""],
-            keep_separator=False
-        )
-        docs_splitted = text_splitter.split_documents(documents)
-    except Exception as e:
-        print(f"❌ 错误：分割文档时出错: {e}"); traceback.print_exc(); return
-    if not docs_splitted:
-        print("❌ 错误：未能成功分割任何文档块。"); return
-    print(f"✅ 已将文档分割成 {len(docs_splitted)} 个文本块。")
+    print("\n✂️ 正在将新文档分割成块...")
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE, 
+        chunk_overlap=CHUNK_OVERLAP,
+        separators=["\n\n", "\n", "。", "！", "？", "，", "、", " ", ""],
+        keep_separator=False
+    )
+    docs_splitted = text_splitter.split_documents(documents)
+    print(f"✅ 已将新文档分割成 {len(docs_splitted)} 个文本块。")
 
     # 3. 初始化嵌入模型
-    print(f"\n🧠 正在从本地路径加载嵌入模型: {model_path}")
-    try:
-        embeddings = SentenceTransformerEmbeddings(
-            model_name=model_path,
-            model_kwargs={'device': 'cpu'}
-        )
-        _ = embeddings.embed_query("测试嵌入模型加载") # 触发加载
-    except Exception as e:
-        print(f"❌ 错误：从 '{model_path}' 初始化嵌入模型时出错: {e}")
-        traceback.print_exc()
-        return
-    print("✅ 嵌入模型初始化成功。")
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"\n🧠 自动检测到可用设备: {device.upper()}")
+    # --- 修正：移除与LangChain内部调用冲突的 'show_progress_bar' 参数 ---
+    embeddings = SentenceTransformerEmbeddings(
+        model_name=model_path, 
+        model_kwargs={'device': device},
+        encode_kwargs={'batch_size': EMBED_BATCH_SIZE}
+    )
 
-    # 4. 创建/更新向量存储
+    # 4. 更新向量存储
     abs_db_dir = os.path.abspath(db_dir)
-    print(f"\n💾 准备创建/更新向量存储于: {abs_db_dir}")
+    print(f"\n💾 准备向向量存储库添加新数据: {abs_db_dir}")
     os.makedirs(abs_db_dir, exist_ok=True)
     try:
         vector_store = Chroma(persist_directory=abs_db_dir, embedding_function=embeddings)
-        print(f"⏳ 开始分批添加 {len(docs_splitted)} 个文本块 (批大小: {ADD_BATCH_SIZE})...")
+        print(f"⏳ 开始分批添加 {len(docs_splitted)} 个新文本块 (批大小: {ADD_BATCH_SIZE})...")
         for i in tqdm(range(0, len(docs_splitted), ADD_BATCH_SIZE), desc="嵌入并存储", unit="批"):
             batch = docs_splitted[i:i + ADD_BATCH_SIZE]
             vector_store.add_documents(documents=batch)
         print("\n⏳ 正在持久化数据库...")
         vector_store.persist()
-        print(f"🎉 向量存储创建/更新成功！数据库位于 '{abs_db_dir}'。")
+        
+        print(f"✍️ 正在更新处理日志: {log_file_path}")
+        with open(log_file_path, 'a', encoding='utf-8') as f:
+            for file_path in files_to_process:
+                f.write(os.path.basename(file_path) + '\n')
+
+        print(f"🎉 向量存储更新成功！")
     except Exception as e:
         print(f"❌ 错误：在嵌入或存储到 Chroma 时出错: {e}"); traceback.print_exc()
     finally:
-        # 清理内存
-        vector_store = None
-        embeddings = None
-        import gc
-        gc.collect()
+        vector_store = None; embeddings = None; import gc; gc.collect()
 
-
+# --- 主程序入口 (无变动) ---
 if __name__ == "__main__":
-    # --- 命令行参数设置 (不变) ---
     parser = argparse.ArgumentParser(description="为法律或案例文档创建向量数据库。")
-    parser.add_argument(
-        '--type',
-        type=str,
-        choices=['legal', 'case'],
-        required=True,
-        help="要索引的文档类型: 'legal' (法条) 或 'case' (案例)。"
-    )
+    parser.add_argument('--type', type=str, choices=['legal', 'case'], required=True, help="要索引的文档类型: 'legal' (法条) 或 'case' (案例)。")
     args = parser.parse_args()
 
-    # --- 路径动态计算 (这里是唯一的修改) ---
-    # 脚本位于 multi_agent/docs/
-    script_dir = os.path.dirname(os.path.abspath(__file__)) # .../docs
-    project_root = os.path.dirname(script_dir)              # .../multi_agent
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
 
-    # 根据参数设置源目录和数据库目录
     if args.type == 'legal':
-        # 源目录是当前目录下的 'legal' 子目录
         SOURCE_DIRECTORY = os.path.join(script_dir, "legal")
-        # 目标目录是当前目录下的 'legal_db' 子目录
         PERSIST_DIRECTORY = os.path.join(script_dir, "legal_db")
         print("--- 选择模式: 法条 (legal) ---")
-    else: # args.type == 'case'
-        # 源目录是当前目录下的 'case' 子目录
-        SOURCE_DIRECTORY = os.path.join(script_dir, "case")
-        # 目标目录是当前目录下的 'case_db' 子目录
+    else: 
+        SOURCE_DIRECTORY = os.path.join(script_dir, "case", "CAIL2019-SCM")
         PERSIST_DIRECTORY = os.path.join(script_dir, "case_db")
         print("--- 选择模式: 案例 (case) ---")
     
-    # 模型路径需要从项目根目录计算
-    EMBEDDING_MODEL_PATH = os.path.join(project_root, "models", "m3e-base")
-    # --- 路径计算修改结束 ---
+    base_dir = os.path.dirname(project_root)
+    EMBEDDING_MODEL_PATH = os.path.join(base_dir, "models", "m3e-base")
 
-    # --- 执行 (不变) ---
     print("-" * 60)
-    print(f"准备为 '{args.type}' 类型文档创建向量数据库")
+    print(f"准备为 '{args.type}' 类型文档创建/更新向量数据库")
     print(f"  - 源文件目录: {os.path.abspath(SOURCE_DIRECTORY)}")
     print(f"  - 目标数据库: {os.path.abspath(PERSIST_DIRECTORY)}")
-    print(f"  - 嵌入模型:   {EMBEDDING_MODEL_PATH}")
+    print(f"  - 嵌入模型:   {os.path.abspath(EMBEDDING_MODEL_PATH)}")
     print("-" * 60)
 
     create_vector_store(
         source_dir=SOURCE_DIRECTORY,
         db_dir=PERSIST_DIRECTORY,
-        model_path=EMBEDDING_MODEL_PATH
+        model_path=EMBEDDING_MODEL_PATH,
+        doc_type=args.type
     )
 
     print("-" * 60)

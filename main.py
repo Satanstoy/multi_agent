@@ -11,7 +11,7 @@ import litellm
 
 # --- 设置环境变量 (保持不变) ---
 os.environ["LITELLM_SKIP_MODEL_VALIDATION"] = "TRUE"
-os.environ["LITELLM_DISABLE_ROUTER"] = "TRUE"
+# os.environ["LITELLM_DISABLE_ROUTER"] = "TRUE"
 
 # --- 工作流执行封装 (修改以接收和格式化历史) ---
 def execute_workflow(user_input: str, history_list: list) -> str:
