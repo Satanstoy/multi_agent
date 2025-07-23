@@ -3,7 +3,7 @@
 import os
 import torch
 import traceback
-
+from langchain_core.messages import HumanMessage, SystemMessage
 # 关键：让工具直接使用共享的 llm 实例，并使用 @tool 装饰器
 from config import llm 
 from crewai.tools import tool
@@ -68,30 +68,7 @@ def _initialize_case_rag():
         except Exception as e:
             print(f"❌ [RAG 初始化] 加载案例向量存储时出错: {e}")
 
-
-# --- 工具定义区 (回归独立函数 + @tool 装饰器) ---
-
-@tool("查询重写工具(QRT)")
-def query_rewriter(query: str) -> str:
-    """
-    将用户口语化的法律问题，重写为一段结构化的、专业的法律事实描述，
-    以便后续的检索工具（如LAS、SCM）能更精确地匹配到相关内容。
-    """
-    print("--- [工具调用] 查询重写工具(QRT) ---")
-    prompt = f"""
-    你是一个法律专家，请将以下这段口语化的案情描述，改写成一段包含了核心法律要素（当事人行为、争议焦点、涉及领域）的、结构化的事实陈述。这段陈述将用于后续的数据库检索。
-
-    [原始案情]:
-    {query}
-
-    [改写后的事实陈述]:
-    """
-    try:
-        response = llm.invoke(prompt)
-        rewritten_query = response.content.strip() if hasattr(response, 'content') else str(response).strip()
-        return f"<QRT status='success'>{rewritten_query}</QRT>"
-    except Exception as e:
-        return f"<QRT status='error'>查询重写失败: {e}</QRT>"
+# --- 工具定义区 ---
 
 @tool("相似案例查找(SCM)")
 def similar_case_matching(query: str, k: int = 3) -> str:
@@ -283,8 +260,7 @@ def legal_text_summary(query: str) -> str:
 
 
 # --- 工具列表 ---
-available_tools = [
-    query_rewriter,             
+available_tools = [         
     similar_case_matching,
     legal_article_search_rag,
     legal_charge_prediction,

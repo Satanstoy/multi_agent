@@ -52,6 +52,7 @@ try:
         # api_key 参数对于 ChatOllama 通常不是必须的，因为Ollama通常不需要API Key
         # 如果需要，请根据LiteLLM文档或Ollama配置添加
         # request_timeout=60 # ChatOllama 默认没有这个参数，如果需要可能要在 LiteLLM 层配置
+        temerature=0.1
     )
     print("✅ LangChain ChatOllama LLM 初始化成功!") # <--- 修改点 13
     print(f" 实例模型名称 (llm.model): {getattr(llm, 'model', 'N/A')}") # <--- 修改点 14: ChatOllama 用 .model
